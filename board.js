@@ -3,12 +3,19 @@ const EMPTY = 0;
 const PAWN = 1, KNIGHT = 2, BISHOP = 3, ROOK = 4, QUEEN = 5, KING = 6;
 const WHITE = 8, BLACK = 16;
 const PIECE_TYPE_MASK = 0b00000111;  // 7
-const COLOR_MASK = 0b00011000;       // 24 (covering both WHITE and BLACK)
+const COLOR_MASK = 0b00011000;
+const INFO_MASK = 0b11100000;  
+
+const MOVED = 32;  // Bit 5: Has the piece moved?
+const EN_PASSANT_VULNERABLE = 64;  // Bit 6: Is this pawn vulnerable to en passant?
+const CASTLING_RIGHTS = 128;    // 24 (covering both WHITE and BLACK)
 
 class ChessBoard {
   constructor() {
     console.log("Initializing ChessBoard");
     this.board = new Uint8Array(64);
+    this.previousPosition = [];
+
     this.initializeBoard();
     this.currentPlayer = WHITE;
     this.enPassantTarget = null;
@@ -20,19 +27,21 @@ class ChessBoard {
     this.blackCapturedElement = document.getElementById('blackCaptured');
     this.createBoardDOM();
     this.positionHistory = [];
+
     this.whiteClock = 600; // 10 minutes in seconds
     this.blackClock = 600;
     this.clockInterval = null;
     this.resultDisplay = document.getElementById('result-display');
-    
+    this.enPassantTargetHistory = null;
+    console.log("board initialized", this.previousPosition.length);
     // Randomly decide if AI plays as white or black
-    this.aiColor = Math.random() < 0.5 ? WHITE : BLACK;
+    this.aiColor = Math.random() < 0.5 ? WHITE : BLACK; 
     console.log("AI color chosen:", this.aiColor === WHITE ? "White" : "Black");
     
     if (typeof ChessAI === 'undefined') {
       console.error("ChessAI class is not defined!");
     } else {
-      this.aiPlayer = new ChessAI(this.aiColor);
+      this.aiPlayer = new ChessAI(this.aiColor,3);
       console.log("AI player created");
     }
 
@@ -64,10 +73,16 @@ class ChessBoard {
       ROOK, KNIGHT, BISHOP, QUEEN, KING, BISHOP, KNIGHT, ROOK
     ];
 
+
+
     for (let i = 0; i < 64; i++) {
       this.board[i] = initialSetup[i] | (i < 16 ? BLACK : i >= 48 ? WHITE : EMPTY);
     }
+
+    this.previousPosition.push(this.board.slice(0));
+
   }
+
 
   getPiece(square) {
     return this.board[square];
@@ -77,7 +92,73 @@ class ChessBoard {
     this.board[square] = piece;
   }
 
+   simulateMove(from, to , maximizingPlayer) {
+    const color = maximizingPlayer ? WHITE : BLACK;
+  
+    const piece = this.board[from];
+
+    if (piece === EMPTY) {
+      console.log('No piece at the starting square');
+      return false;
+    }
+
+    if (!this.isLegalMove(from, to, true)) {
+      console.log('Illegal move');
+      return false;
+    }
+
+    // Handle castling
+    if ((piece & PIECE_TYPE_MASK) === KING && Math.abs(from - to) === 2) {
+        console.log('castling')
+      const direction = (to > from) ? 1 : -1;
+      const rookFrom = (direction === 1) ? (from | 7) : (from & 56);
+      const rookTo = from + direction;
+
+      this.board[rookTo] = this.board[rookFrom];
+      this.board[rookFrom] = EMPTY;
+      return this.simulateFinalizeMove(from, to, piece, color);
+
+    }
+
+    // Handle en passant capture
+   // Handle en passant capture
+   if (((to + (piece & COLOR_MASK ? 8 : -8)) & INFO_MASK) === EN_PASSANT_VULNERABLE) {
+    console.log('capturing en passant')
+  const capturedPawnSquare = to + (piece & COLOR_MASK ? 8 : -8);
+  this.board[capturedPawnSquare] = EMPTY;
+}
+
+    // Move the piece
+    this.board[to] = piece;
+    this.board[from] = EMPTY;
+
+    // Handle pawn promotion
+    if ((piece & PIECE_TYPE_MASK) === PAWN && (to < 8 || to >= 56)) {
+        console.log('promoting')
+        this.board[to] = QUEEN | color;
+    } 
+     return this.simulateFinalizeMove(from, to, piece, color);
+    
+
+  }
+
+  simulateFinalizeMove(from, to, piece, color) {
+
+    // Handle en passant
+    this.handleEnPassant(from, to, piece);
+
+
+    this.updatePositionHistory();
+   return this.checkGameEndConditions(true, color);
+
+    // Make AI move if it's AI's turn
+  }
+  
+
   movePiece(from, to) {
+    console.log(`Moving piece from ${from} to ${to}`);
+  console.log('Board before move:', this.board.slice());
+  
     const piece = this.board[from];
     const capturedPiece = this.board[to];
 
@@ -92,7 +173,7 @@ class ChessBoard {
     }
 
     // Handle castling
-    if ((piece & PIECE_TYPE_MASK) === KING && Math.abs(from - to) === 2) {
+    if ((capturedPiece & PIECE_TYPE_MASK) === KING && Math.abs(from - to) === 2) {
       const direction = (to > from) ? 1 : -1;
       const rookFrom = (direction === 1) ? (from | 7) : (from & 56);
       const rookTo = from + direction;
@@ -101,27 +182,30 @@ class ChessBoard {
       this.board[rookFrom] = EMPTY;
     }
 
-    // Handle en passant capture
-    if ((piece & PIECE_TYPE_MASK) === PAWN && to === this.enPassantTarget) {
-      const capturedPawnSquare = to + (piece & COLOR_MASK ? -8 : 8);
-      this.addCapturedPiece(this.board[capturedPawnSquare]);
-      this.board[capturedPawnSquare] = EMPTY;
-    }
+// Handle en passant capture
+if (this.board[to + (piece & COLOR_MASK ? 8 : -8)] & EN_PASSANT_VULNERABLE) {
+    console.log('capturing en passant')
+    const capturedPawnSquare = to + (piece & COLOR_MASK ? 8 : -8);
+    this.addCapturedPiece(this.board[capturedPawnSquare]);
+    this.board[capturedPawnSquare] = EMPTY;
+}
 
     // Move the piece
     this.board[to] = piece;
     this.board[from] = EMPTY;
+
+
 
     // Handle pawn promotion
     if ((piece & PIECE_TYPE_MASK) === PAWN && (to < 8 || to >= 56)) {
       this.handlePromotion(to).then(() => {
         this.finalizeMove(from, to, piece, capturedPiece);
       });
-    } else {
-      this.finalizeMove(from, to, piece, capturedPiece);
     }
+     return this.finalizeMove(from, to, piece, capturedPiece);
+    
 
-    return true;
+   
   }
 
   finalizeMove(from, to, piece, capturedPiece) {
@@ -130,7 +214,8 @@ class ChessBoard {
 
     // Update game state
     this.lastMove = { from, to, piece, capturedPiece };
-    this.switchTurn();
+    
+    
 
     if (capturedPiece !== EMPTY) {
       this.addCapturedPiece(capturedPiece);
@@ -140,18 +225,21 @@ class ChessBoard {
     this.checkGameEndConditions();
     this.updateBoardDOM();
 
+    this.switchTurn();
     // Make AI move if it's AI's turn
     if (this.currentPlayer === this.aiColor) {
+      console.log("AI is making a move");
       setTimeout(() => this.makeAIMove(), 500);
     }
   }
 
-  handlePromotion(square) {
+  handlePromotion(square,simulate) {
     return new Promise((resolve) => {
       const color = this.board[square] & COLOR_MASK;
-      
+      console.log('ready to promote')
       // If it's the AI's turn, automatically promote to queen
-      if (color === this.aiColor) {
+      if (color === this.aiColor || simulate) {
+        console.log("promoting")
         this.board[square] = QUEEN | color;
         resolve();
         return;
@@ -192,33 +280,59 @@ class ChessBoard {
   }
 
   handleEnPassant(from, to, piece) {
-    // Reset en passant target
-    this.enPassantTarget = null;
+    
+ 
+for (let i = 0; i < 64; i++) {
+  if (this.board[i] & INFO_MASK === EN_PASSANT_VULNERABLE) {
+    this.board[i] = this.board[i] & ~EN_PASSANT_VULNERABLE;
+  }
+}
+
 
     // Set new en passant target if applicable
     if ((piece & PIECE_TYPE_MASK) === PAWN && Math.abs(from - to) === 16) {
-      this.enPassantTarget = (from + to) / 2;
-    }
+        this.board[to] |= EN_PASSANT_VULNERABLE;
+      }
   }
 
-  checkGameEndConditions() {
-    const opponentColor = this.currentPlayer;
+  checkGameEndConditions(simulate , color) {
+
+     if(!color ) {
+        color = this.currentPlayer;
+    }
+    let opponentColor = color === WHITE ? BLACK : WHITE;
     if (this.isInCheck(opponentColor)) {
       if (this.isCheckmate(opponentColor)) {
-        console.log(`Checkmate! ${this.currentPlayer === WHITE ? 'Black' : 'White'} wins!`);
-        this.endGame(`${this.currentPlayer === WHITE ? 'Black' : 'White'} wins by checkmate!`);
+        if (simulate) {
+          console.log("Checkmate! ", color === WHITE ? 'Black' : 'White', "wins!");
+          return 'end node';
+        }
+        console.log(`Checkmate! ${color === WHITE ? 'Black' : 'White'} wins!`);
+        this.endGame(`${color === WHITE ? 'Black' : 'White'} wins by checkmate!`);
       } else {
         console.log(`${opponentColor === WHITE ? 'White' : 'Black'} is in check!`);
       }
     } else {
       if (this.isStalemate(opponentColor)) {
+        if (simulate) {
+          console.log("Stalemate! ", color === WHITE ? 'Black' : 'White', "wins!");
+          return 'end node';
+        }
         this.endGame('Draw by stalemate!');
       } else if (this.isInsufficientMaterial()) {
+        if (simulate) {
+          return 'end node';
+        }
         this.endGame('Draw by insufficient material!');
       } else if (this.isThreefoldRepetition()) {
+        if (simulate) {
+          console.log("Draw by threefold repetition!");
+          return 'end node';
+        }
         this.endGame('Draw by threefold repetition!');
       }
     }
+    return true
   }
 
   checkForDraw() {
@@ -231,8 +345,11 @@ class ChessBoard {
   }
 
   updatePositionHistory() {
+    console.log('updating position history')
     const currentPosition = this.board.join(',');
     this.positionHistory.push(currentPosition);
+    const currentPositionBoard = this.board.slice(0);
+    this.previousPosition.push(currentPositionBoard);
   }
 
   getValidMoves(square) {
@@ -358,11 +475,11 @@ class ChessBoard {
     }
   }
 
-  isLegalMove(from, to) {
+  isLegalMove(from, to, simulate) {
     const piece = this.board[from];
     const pieceColor = piece & COLOR_MASK;
 
-    if (pieceColor !== this.currentPlayer) {
+    if (pieceColor !== this.currentPlayer && !simulate) {
       return false;
     }
 
@@ -432,9 +549,10 @@ class ChessBoard {
           moves.push(captureSquare);
         }
         // En passant capture
-        if (captureSquare === this.enPassantTarget) {
-          moves.push(captureSquare);
-        }
+        if ((this.board[square + (color === WHITE ? -1 : 1)] & EN_PASSANT_VULNERABLE) === EN_PASSANT_VULNERABLE) {
+            moves.push(captureSquare);
+          }
+        
       }
     });
 
@@ -579,6 +697,7 @@ class ChessBoard {
     const pieceNames = ['', 'pawn', 'knight', 'bishop', 'rook', 'queen', 'king'];
     const pieceName = pieceNames[pieceType];
     
+    
     const img = new Image();
     img.src = `${color}/${pieceName}.png`;
     img.alt = `${color} ${pieceName}`;
@@ -611,6 +730,26 @@ class ChessBoard {
     }
   }
 
+  undoMove() {
+    if (this.previousPosition.length > 0) { 
+      // Remove the current position
+     
+      this.previousPosition.pop(); 
+      const lastPosition = this.previousPosition[this.previousPosition.length - 1];
+
+      this.positionHistory.pop();
+
+    
+      this.board = lastPosition.slice(0);
+     
+
+      
+        // Update the board display
+    } else {
+      console.log("No more moves to undo",this.positionHistory);
+    }
+  }
+
   addCapturedPiece(piece) {
     const capturedColor = piece & COLOR_MASK;
     if (capturedColor === WHITE) {
@@ -622,6 +761,7 @@ class ChessBoard {
   }
 
   updateCapturedPiecesDOM() {
+    console.log('updateCapturedPiecesDOM',this.blackCaptured,this.whiteCaptured)
     // White pieces are captured by Black, so they go on the Black side
     this.updateCapturedPiecesSide(this.blackCapturedElement, this.whiteCaptured);
     // Black pieces are captured by White, so they go on the White side
@@ -716,7 +856,9 @@ class ChessBoard {
   }
 
   makeAIMove() {
-    const bestMove = this.aiPlayer.makeMove(this);
+    console.log('makeAIMove called')
+    const bestMove = this.aiPlayer.makeMoveMinMax(this);
+    console.log("bestMove", bestMove);
     if (bestMove) {
         this.movePiece(bestMove.from, bestMove.to);
     }
@@ -727,6 +869,7 @@ class ChessBoard {
       [PAWN]: '', [KNIGHT]: 'N', [BISHOP]: 'B', 
       [ROOK]: 'R', [QUEEN]: 'Q', [KING]: 'K'
     };
+
     const piece = this.board[move.from] & PIECE_TYPE_MASK;
     const pieceSymbol = pieceSymbols[piece];
     const fromSquare = this.indexToSquare(move.from);
@@ -751,11 +894,6 @@ class ChessBoard {
   }
 }
 
-// Game initialization
-console.log("About to initialize game");
-const game = new ChessBoard();
-game.aiVisualizer = new AIVisualizer('ai-visualizer-container');
-console.log("Game initialized");
 
 // CSS for the board and pieces
 const style = document.createElement('style');

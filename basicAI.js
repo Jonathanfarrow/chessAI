@@ -1,6 +1,8 @@
 class ChessAI {
-    constructor(color) {
+    constructor(color,depth,) {
       this.color = color;
+      this.depth = depth;
+      this.simulatedBoard; 
       this.pieceSquareTables = {
         [PAWN]: [
           0,  0,  0,  0,  0,  0,  0,  0,
@@ -82,7 +84,7 @@ class ChessAI {
     }
   
     getPieceValue(pieceType) {
-      const values = {[PAWN]: 100, [KNIGHT]: 320, [BISHOP]: 330, [ROOK]: 500, [QUEEN]: 900, [KING]: 20000};
+      const values = {[PAWN]: 1, [KNIGHT]: 3, [BISHOP]: 3, [ROOK]: 5, [QUEEN]: 9, [KING]: 0};
       return values[pieceType] || 0;
     }
   
@@ -106,6 +108,7 @@ class ChessAI {
             [PAWN]: 'p', [KNIGHT]: 'N', [BISHOP]: 'B', 
             [ROOK]: 'R', [QUEEN]: 'Q', [KING]: 'K'
         };
+        console.log('move', this.game.board[move.from]);
         const piece = this.game.board[move.from] & PIECE_TYPE_MASK;
         const pieceSymbol = pieceSymbols[piece];
         const toSquare = this.indexToSquare(move.to);
@@ -124,7 +127,8 @@ class ChessAI {
         const rootNode = {
             label: 'Root',
             children: []
-        };
+        }; 
+        
 
         moves.forEach(move => {
             const moveNotation = game.moveToChessNotation(move);
@@ -174,6 +178,107 @@ class ChessAI {
 
         return bestMove;
     }
+
+
+    makeMoveMinMax(game) {
+        console.log('minimax called', game.board);
+        const rootNode = { label: 'Root', children: [] };
+        const bestMove = this.minimax(game, this.depth, true, -Infinity, Infinity, rootNode);
+        console.log('bestMove', game.board);
+        console.log(bestMove);
+        if (game.aiVisualizer) {
+            game.aiVisualizer.updateTree(rootNode);
+        }
+        
+
+        return bestMove.move;
+    }
+
+
+     minimax(game, depth, isMaximizingPlayer, alpha, beta, node) {
+        if (depth === 0) {
+            return { score: this.evaluatePosition(game.board) };
+        }
+
+        const moves = game.getAllValidMoves(isMaximizingPlayer ? this.color : (this.color === WHITE ? BLACK : WHITE));
+        
+        if (moves.length === 0) {
+            // Game over (checkmate or stalemate)
+            return { score: isMaximizingPlayer ? -Infinity : Infinity };
+        }
+
+        let bestMove = null;
+        let bestScore = isMaximizingPlayer ? -Infinity : Infinity;
+
+        const expectedBoard = game.board.slice();
+
+        for (const move of moves) {
+            const childNode = { move: game.moveToChessNotation(move), children: [] };
+            node.children.push(childNode);
+
+           const endNode=  game.simulateMove(move.from,move.to , isMaximizingPlayer);
+            if(endNode === 'end node') {
+                console.log('end node');
+                childNode.score = isMaximizingPlayer ? -1000 : 1000;
+                game.undoMove();
+                return {move: move, score: childNode.score, moveChess: game.moveToChessNotation(move)};
+            }
+            const result = this.minimax(game, depth - 1, !isMaximizingPlayer, alpha, beta, childNode);
+            
+           
+            game.undoMove();
+            childNode.score = result.score;
+
+            function testBoardState(board, expectedBoard) {
+                if (!expectedBoard) {
+                    console.warn("No expected board state provided for comparison.");
+                    return false;
+                }
+            
+                if (board.length !== expectedBoard.length) {
+                    console.error("Board sizes do not match.");
+                    return false;
+                }
+            
+                for (let i = 0; i < board.length; i++) {
+                    if (board[i] !== expectedBoard[i]) {
+                        console.error(`Mismatch at index ${i}: Expected ${expectedBoard[i]}, but got ${board[i]} move was ${JSON.stringify(move)} `,);
+                        return false;
+                    }
+                }
+            
+                console.log(`Board state matches the expected state after move ${JSON.stringify(move)}.`);            }
+
+            
+
+                
+
+            if (isMaximizingPlayer) {
+                if (result.score > bestScore) {
+                    bestScore = result.score;
+                    bestMove = move;
+                    node.isBest = true;
+
+                }
+                alpha = Math.max(alpha, bestScore);
+            } else {
+                if (result.score < bestScore) {
+                    bestScore = result.score;
+                    bestMove = move;
+                    node.isBest = true;
+
+                }
+                beta = Math.min(beta, bestScore);
+            }
+
+            if (beta <= alpha) {
+                break; // Alpha-beta pruning
+            }
+        }
+
+        return { move: bestMove, score: bestScore , moveChess: game.moveToChessNotation(bestMove)};
+    }
+
 
     // Other AI methods like minimax, alpha-beta pruning, etc.
 }
